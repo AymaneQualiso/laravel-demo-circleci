@@ -7,26 +7,91 @@ jobs:
   test-php:
     # Install php packages and run tests
     docker:
-      - image: cimg/php:7.3-node
+      - image: cimg/php:8.1-node
+      - image: mysql:8.0
+        name: mysql
+        environment:
+          MYSQL_DATABASE: laravel_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: password
+          MYSQL_ROOT_PASSWORD: root
     steps:
       - checkout
       - php/install-packages
       - run:
+          name: Setup environment file
+          command: cp .env.example .env
+      - run:
+          name: Set database config
+          command: |
+            echo "DB_CONNECTION=mysql" >> .env
+            echo "DB_HOST=mysql" >> .env  # 🔹 Use service name, not 127.0.0.1
+            echo "DB_PORT=3306" >> .env
+            echo "DB_DATABASE=laravel_test" >> .env
+            echo "DB_USERNAME=user" >> .env
+            echo "DB_PASSWORD=password" >> .env
+      - run:
+          name: Generate application key
+          command: php artisan key:generate
+      - run:
+          name: Wait for MySQL
+          command: |
+            for i in {1..30}; do
+              nc -z mysql 3306 && echo "MySQL is up!" && exit 0
+              echo "Waiting for MySQL..."
+              sleep 2
+            done
+            echo "MySQL failed to start" && exit 1
+      - run:
+          name: Clear config cache
+          command: php artisan config:clear
+      - run:
+          name: Run migrations
+          command: php artisan migrate --env=testing --force
+      - run:
           name: run tests
           command: ./vendor/bin/phpunit
+  # deploy:
+  #   # This is an example deploy job, not actually used by the workflow
+  #   docker:
+  #     - image: cimg/base:stable
+  #   steps:
+  #     # Replace this with steps to deploy to users
+  #     - run:
+  #         name: deploy
+  #         command: '#e.g. ./deploy.sh'
   deploy:
-    # This is an example deploy job, not actually used by the workflow
-    docker:
-      - image: cimg/base:stable
+    machine:
+      image: ubuntu-2204:2023.07.2
     steps:
-      # Replace this with steps to deploy to users
       - run:
-          name: deploy
-          command: '#e.g. ./deploy.sh'
+          name: Deploy Over SSH
+          command: |
+            ssh $SSH_USER@$SSH_HOST "<remote deploy command>"
+# workflows:
+#   build-and-test:
+#     jobs:
+#       - test-php
+#     # - deploy:
+#     #     requires:
+#     #       - test-php
 workflows:
-  build-and-test:
+  production_pipeline:
+    when:
+      equal: [ "main", << pipeline.git.branch >> ]
     jobs:
       - test-php
-    # - deploy:
-    #     requires:
-    #       - test-php
+      # - deploy-prod
+      - deploy:
+          requires:
+            - test-php # only deploy once build job has completed
+          filters:
+            branches:
+              only: main
+
+  development_pipeline:
+    when:
+      equal: [ "main", << pipeline.git.branch >> ]
+    jobs:
+      - test-php
+      # - deploy-dev
